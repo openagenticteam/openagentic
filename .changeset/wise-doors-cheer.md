@@ -1,0 +1,5 @@
+---
+openagentic: major
+---
+
+Initial release.
