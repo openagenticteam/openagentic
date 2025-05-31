@@ -1,10 +1,10 @@
 # openagentic
 
-## 2.0.0
+## 1.0.1
 
-### Major Changes
+### Minor Changes
 
-- 9599831: Initial release.
+- 9599831: Add Agentic Tools v1.
 
 ## 1.0.0
 
