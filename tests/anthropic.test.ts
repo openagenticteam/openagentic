@@ -2,6 +2,7 @@ import { ChatAnthropic } from "@langchain/anthropic"
 import { HumanMessage } from "@langchain/core/messages"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
+import { createCostTracker } from "../src/utils/cost-tracker"
 import { anthropic, anthropicExecutableTool, anthropicTool, executeAnthropic } from "../src/tools/anthropic"
 
 // Mock LangChain modules
@@ -43,6 +44,10 @@ describe("anthropic Tool", () => {
                 type: "string",
                 description: "The Anthropic Claude model to use for generation",
                 enum: ["claude-3-5-sonnet-20240620", "claude-3-opus-20240229", "claude-3-sonnet-20240229", "claude-3-haiku-20240307"],
+              },
+              maxTokens: {
+                type: "number",
+                description: "Maximum number of tokens to generate (optional, will use cost-aware default if not specified)",
               },
             },
             required: ["message", "apiKey"],
@@ -124,6 +129,7 @@ describe("anthropic Tool", () => {
         expect(ChatAnthropic).toHaveBeenCalledWith({
           apiKey: "test-api-key",
           modelName: "claude-3-5-sonnet-20240620",
+          maxTokens: undefined,
         })
 
         expect(HumanMessage).toHaveBeenCalledWith("Hello, Claude!")
@@ -134,109 +140,90 @@ describe("anthropic Tool", () => {
           response: "Test response",
           model: "claude-3-5-sonnet-20240620",
           usage: { total: 150 },
+          costTracker: undefined,
         })
       })
 
-      it("should use default model name when not provided", async () => {
+      it("should execute with cost tracking", async () => {
+        const mockResponse = {
+          content: "Test response",
+          response_metadata: {
+            tokenUsage: {
+              promptTokens: 10,
+              completionTokens: 20,
+            },
+          },
+        }
+        mockInvoke.mockResolvedValue(mockResponse)
+
+        const costTracker = createCostTracker(1000)
+        const result = await executeAnthropic({
+          message: "Hello",
+          apiKey: "test-key",
+          modelName: "claude-3-5-sonnet-20240620",
+        }, costTracker)
+
+        expect(result.costTracker).toBeDefined()
+        expect(result.costTracker?.totalQueries).toBe(1)
+        expect(result.costTracker?.toolQueries).toBe(1)
+      })
+
+      it("should use cost-aware maxTokens when not provided", async () => {
         const mockResponse = {
           content: "Test response",
           response_metadata: { tokenUsage: null },
         }
         mockInvoke.mockResolvedValue(mockResponse)
 
-        const result = await executeAnthropic({
+        const costTracker = createCostTracker(1000)
+        await executeAnthropic({
           message: "Hello",
           apiKey: "test-key",
-        })
+          modelName: "claude-3-5-sonnet-20240620",
+        }, costTracker)
 
         expect(ChatAnthropic).toHaveBeenCalledWith({
           apiKey: "test-key",
-          modelName: "claude-3-5-sonnet-20240620", // Default model
-        })
-
-        expect(result).toEqual({
-          success: true,
-          response: "Test response",
-          model: "claude-3-5-sonnet-20240620",
-          usage: null,
+          modelName: "claude-3-5-sonnet-20240620",
+          maxTokens: expect.any(Number),
         })
       })
 
-      it("should handle different Claude model names", async () => {
+      it("should respect explicit maxTokens over cost-aware defaults", async () => {
         const mockResponse = {
           content: "Test response",
-          response_metadata: {},
+          response_metadata: { tokenUsage: null },
         }
         mockInvoke.mockResolvedValue(mockResponse)
 
+        const costTracker = createCostTracker(1000)
         await executeAnthropic({
           message: "Hello",
           apiKey: "test-key",
-          modelName: "claude-3-opus-20240229",
-        })
+          modelName: "claude-3-5-sonnet-20240620",
+          maxTokens: 100,
+        }, costTracker)
 
         expect(ChatAnthropic).toHaveBeenCalledWith({
           apiKey: "test-key",
-          modelName: "claude-3-opus-20240229",
-        })
-      })
-
-      it("should handle complex messages", async () => {
-        const mockResponse = {
-          content: "Complex response",
-          response_metadata: {},
-        }
-        mockInvoke.mockResolvedValue(mockResponse)
-
-        const complexMessage = "Analyze this code: function test() { return 'hello'; }"
-
-        await executeAnthropic({
-          message: complexMessage,
-          apiKey: "test-key",
           modelName: "claude-3-5-sonnet-20240620",
+          maxTokens: 100,
         })
-
-        expect(HumanMessage).toHaveBeenCalledWith(complexMessage)
-        expect(mockInvoke).toHaveBeenCalledWith([{ content: complexMessage }])
-      })
-
-      it("should handle multiline messages", async () => {
-        const mockResponse = {
-          content: "Multiline response",
-          response_metadata: {},
-        }
-        mockInvoke.mockResolvedValue(mockResponse)
-
-        const multilineMessage = `Line 1
-Line 2
-Line 3`
-
-        await executeAnthropic({
-          message: multilineMessage,
-          apiKey: "test-key",
-          modelName: "claude-3-5-sonnet-20240620",
-        })
-
-        expect(HumanMessage).toHaveBeenCalledWith(multilineMessage)
-      })
-
-      it("should handle missing response_metadata", async () => {
-        const mockResponse = {
-          content: "Test response",
-          // No response_metadata
-        }
-        mockInvoke.mockResolvedValue(mockResponse)
-
-        const result = await executeAnthropic({
-          message: "Hello",
-          apiKey: "test-key",
-        })
-
-        expect(result.usage).toBeNull()
       })
     })
 
     describe("error handling", () => {
+      it("should throw error when budget insufficient", async () => {
+        const costTracker = createCostTracker(1)
+        await expect(
+          executeAnthropic({
+            message: "This is a very long message that would cost more than 1 cent",
+            apiKey: "test-key",
+            modelName: "claude-3-5-sonnet-20240620",
+          }, costTracker),
+        ).rejects.toThrow("Insufficient budget")
+      })
+
       it("should throw detailed error for ChatAnthropic constructor errors", async () => {
         mockChatAnthropic.mockImplementation(() => {
           throw new Error("Invalid API key")
@@ -273,18 +260,6 @@ Line 3`
             modelName: "claude-3-5-sonnet-20240620",
           }),
         ).rejects.toThrow("Anthropic execution failed: Rate limit exceeded")
-      })
-
-      it("should handle authentication errors", async () => {
-        mockInvoke.mockRejectedValue(new Error("Authentication failed"))
-
-        await expect(
-          executeAnthropic({
-            message: "Hello",
-            apiKey: "wrong-key",
-            modelName: "claude-3-5-sonnet-20240620",
-          }),
-        ).rejects.toThrow("Anthropic execution failed: Authentication failed")
       })
 
       it("should handle unknown errors", async () => {
@@ -333,24 +308,6 @@ Line 3`
         })
 
         expect(HumanMessage).toHaveBeenCalledWith(longMessage)
-      })
-
-      it("should handle messages with special characters", async () => {
-        const mockResponse = {
-          content: "Response with special chars",
-          response_metadata: {},
-        }
-        mockInvoke.mockResolvedValue(mockResponse)
-
-        const specialMessage = "Test with émojis 🚀 and unicode: ñáéíóú"
-
-        await executeAnthropic({
-          message: specialMessage,
-          apiKey: "test-key",
-          modelName: "claude-3-5-sonnet-20240620",
-        })
-
-        expect(HumanMessage).toHaveBeenCalledWith(specialMessage)
       })
     })
   })

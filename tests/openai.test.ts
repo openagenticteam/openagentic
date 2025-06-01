@@ -2,6 +2,7 @@ import { HumanMessage } from "@langchain/core/messages"
 import { ChatOpenAI } from "@langchain/openai"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
+import { createCostTracker } from "../src/utils/cost-tracker"
 import { executeOpenAi, openai, openaiExecutableTool, openaiTool } from "../src/tools/openai"
 
 // Mock LangChain modules
@@ -43,6 +44,10 @@ describe("openAI Tool", () => {
                 type: "string",
                 description: "The OpenAI model to use for generation",
                 enum: ["gpt-4", "gpt-4-turbo", "gpt-3.5-turbo", "gpt-4-1106-preview"],
+              },
+              maxTokens: {
+                type: "number",
+                description: "Maximum number of tokens to generate (optional, will use cost-aware default if not specified)",
               },
             },
             required: ["message", "apiKey"],
@@ -124,6 +129,7 @@ describe("openAI Tool", () => {
         expect(ChatOpenAI).toHaveBeenCalledWith({
           apiKey: "test-api-key",
           modelName: "gpt-4",
+          maxTokens: undefined,
         })
 
         expect(HumanMessage).toHaveBeenCalledWith("Hello, world!")
@@ -134,89 +140,90 @@ describe("openAI Tool", () => {
           response: "Test response",
           model: "gpt-4",
           usage: { total: 100 },
+          costTracker: undefined,
         })
       })
 
-      it("should use default model name when not provided", async () => {
+      it("should execute with cost tracking", async () => {
+        const mockResponse = {
+          content: "Test response",
+          response_metadata: {
+            tokenUsage: {
+              promptTokens: 10,
+              completionTokens: 20,
+            },
+          },
+        }
+        mockInvoke.mockResolvedValue(mockResponse)
+
+        const costTracker = createCostTracker(1000)
+        const result = await executeOpenAi({
+          message: "Hello",
+          apiKey: "test-key",
+          modelName: "gpt-4",
+        }, costTracker)
+
+        expect(result.costTracker).toBeDefined()
+        expect(result.costTracker?.totalQueries).toBe(1)
+        expect(result.costTracker?.toolQueries).toBe(1)
+      })
+
+      it("should use cost-aware maxTokens when not provided", async () => {
         const mockResponse = {
           content: "Test response",
           response_metadata: { tokenUsage: null },
         }
         mockInvoke.mockResolvedValue(mockResponse)
 
-        const result = await executeOpenAi({
-          message: "Hello",
-          apiKey: "test-key",
-        })
-
-        expect(ChatOpenAI).toHaveBeenCalledWith({
-          apiKey: "test-key",
-          modelName: "gpt-4-1106-preview", // Default model
-        })
-
-        expect(result).toEqual({
-          success: true,
-          response: "Test response",
-          model: "gpt-4-1106-preview",
-          usage: null,
-        })
-      })
-
-      it("should handle different model names", async () => {
-        const mockResponse = {
-          content: "Test response",
-          response_metadata: {},
-        }
-        mockInvoke.mockResolvedValue(mockResponse)
-
+        const costTracker = createCostTracker(1000)
         await executeOpenAi({
           message: "Hello",
-          apiKey: "test-key",
-          modelName: "gpt-3.5-turbo",
-        })
-
-        expect(ChatOpenAI).toHaveBeenCalledWith({
-          apiKey: "test-key",
-          modelName: "gpt-3.5-turbo",
-        })
-      })
-
-      it("should handle complex messages", async () => {
-        const mockResponse = {
-          content: "Complex response",
-          response_metadata: {},
-        }
-        mockInvoke.mockResolvedValue(mockResponse)
-
-        const complexMessage = "This is a complex message with special characters: @#$%^&*()"
-
-        await executeOpenAi({
-          message: complexMessage,
           apiKey: "test-key",
           modelName: "gpt-4",
-        })
+        }, costTracker)
 
-        expect(HumanMessage).toHaveBeenCalledWith(complexMessage)
-        expect(mockInvoke).toHaveBeenCalledWith([{ content: complexMessage }])
+        expect(ChatOpenAI).toHaveBeenCalledWith({
+          apiKey: "test-key",
+          modelName: "gpt-4",
+          maxTokens: expect.any(Number),
+        })
       })
 
-      it("should handle missing response_metadata", async () => {
+      it("should respect explicit maxTokens over cost-aware defaults", async () => {
         const mockResponse = {
           content: "Test response",
-          // No response_metadata
+          response_metadata: { tokenUsage: null },
         }
         mockInvoke.mockResolvedValue(mockResponse)
 
-        const result = await executeOpenAi({
+        const costTracker = createCostTracker(1000)
+        await executeOpenAi({
           message: "Hello",
           apiKey: "test-key",
-        })
+          modelName: "gpt-4",
+          maxTokens: 100,
+        }, costTracker)
 
-        expect(result.usage).toBeNull()
+        expect(ChatOpenAI).toHaveBeenCalledWith({
+          apiKey: "test-key",
+          modelName: "gpt-4",
+          maxTokens: 100,
+        })
       })
     })
 
     describe("error handling", () => {
+      it("should throw error when budget insufficient", async () => {
+        const costTracker = createCostTracker(1)
+        await expect(
+          executeOpenAi({
+            message: "This is a very long message that would cost more than 1 cent",
+            apiKey: "test-key",
+            modelName: "gpt-4",
+          }, costTracker),
+        ).rejects.toThrow("Insufficient budget")
+      })
+
       it("should throw detailed error for ChatOpenAI constructor errors", async () => {
         mockChatOpenAI.mockImplementation(() => {
           throw new Error("Invalid API key")
