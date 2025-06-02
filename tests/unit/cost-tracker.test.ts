@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-import type { CostTracker, UsageRecord } from "../src/types"
-import { createCostTracker } from "../src/utils/cost-tracker"
+import type { CostTracker, UsageRecord } from "../../src/types"
+import { createCostTracker } from "../../src/utils/cost-tracker"
 
 // Mock the JSON data import
-vi.mock("../src/utils/model_prices_and_context_window.json", () => ({
+vi.mock("../../src/utils/model_prices_and_context_window.json", () => ({
   default: {
     "gpt-4": {
       max_tokens: 8192,

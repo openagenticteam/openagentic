@@ -104,3 +104,40 @@ export interface CostAwareOptions {
   maxCostCents?: number
   conservativeMode?: boolean
 }
+
+/**
+ * Cost configuration for cost-aware execution
+ */
+export interface CostConfig {
+  maxBudgetCents: number
+  conservativeMode?: boolean
+}
+
+/**
+ * MCP (Model Context Protocol) Tool Definition
+ * Currently not implemented - this shows what we'd need to add
+ */
+export interface MCPTool {
+  type: "mcp"
+  server_label: string
+  server_url: string
+  require_approval: "never" | "always" | "prompt"
+  description?: string
+  parameters?: {
+    type: "object"
+    properties: Record<string, any>
+    required?: string[]
+  }
+}
+
+/**
+ * Executable MCP Tool (future implementation)
+ */
+export interface ExecutableMCPTool extends MCPTool {
+  execute: (params: any, costTracker?: CostTracker) => Promise<any>
+}
+
+/**
+ * Union type for all supported tool types
+ */
+export type AnyTool = Tool | MCPTool
