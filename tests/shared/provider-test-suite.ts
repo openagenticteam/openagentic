@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest"
 
+import type { ExecutableTool } from "../../src/types"
 import { getDynamicTool } from "../../src/utils/dynamic-tools"
 
 import {
@@ -22,7 +23,7 @@ export const createProviderTestSuite = (providerConfig: ProviderConfig) => {
     const { name, displayName, defaultModel, models, defaultMaxTokens, mockClass, expectedUsage } = providerConfig
 
     // Get dynamic tools for testing
-    const executableTool = getDynamicTool(name)!
+    const executableTool = getDynamicTool(name)! as ExecutableTool
     const tool = { ...executableTool }
     delete (tool as any).execute // Remove execute for schema-only tests
     const executeFn = executableTool.execute

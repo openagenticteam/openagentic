@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { createAIWithTools } from "../../src/ai"
 import { createToolCollection } from "../../src/tools"
+import type { ExecutableTool } from "../../src/types"
 import { getDynamicTool } from "../../src/utils/dynamic-tools"
 import { cleanupMocks, createMockCostTracker, createMockModel } from "../shared/test-utils"
 
@@ -27,8 +28,8 @@ describe("tools integration tests", () => {
   describe("multi-tool workflows", () => {
     it("should handle multiple tool executions in sequence", async () => {
       const _costTracker = createMockCostTracker(500, 1000)
-      const openaiTool = getDynamicTool("openai")
-      const anthropicTool = getDynamicTool("anthropic")
+      const openaiTool = getDynamicTool("openai") as ExecutableTool
+      const anthropicTool = getDynamicTool("anthropic") as ExecutableTool
 
       expect(openaiTool).toBeDefined()
       expect(anthropicTool).toBeDefined()
@@ -55,7 +56,7 @@ describe("tools integration tests", () => {
   describe("aI interface integration", () => {
     it("should integrate tools with AI interface", async () => {
       const model = createMockModel()
-      const tools = [getDynamicTool("openai")!]
+      const tools = [getDynamicTool("openai")!] as ExecutableTool[]
       const toolCollection = createToolCollection(tools)
 
       const aiWithTools = createAIWithTools(model, toolCollection)
@@ -82,8 +83,8 @@ describe("tools integration tests", () => {
 
   describe("tool interoperability", () => {
     it("should maintain consistent interfaces across different tool types", () => {
-      const openaiTool = getDynamicTool("openai")
-      const anthropicTool = getDynamicTool("anthropic")
+      const openaiTool = getDynamicTool("openai") as ExecutableTool
+      const anthropicTool = getDynamicTool("anthropic") as ExecutableTool
 
       // Both tools should have the same interface structure
       expect(openaiTool?.type).toBe("function")
@@ -100,7 +101,7 @@ describe("tools integration tests", () => {
       const providers = ["openai", "anthropic"]
 
       providers.forEach((provider) => {
-        const tool = getDynamicTool(provider)
+        const tool = getDynamicTool(provider) as ExecutableTool
         expect(tool).toBeDefined()
         expect(tool?.function.name).toBe(provider)
 

@@ -11,7 +11,7 @@ export default defineConfig().append({
     "**/coverage/**",
     "**/pnpm-lock.yaml",
     "**/.env*",
-    "**/.md",
+    "**/*.md",
     "**/.gitignore",
     "**/.gitattributes",
     "**/.dockerignore",

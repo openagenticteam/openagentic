@@ -7,12 +7,12 @@ import {
   executeTool,
   tools,
 } from "../src/tools"
-import type { CostTracker } from "../src/types"
+import type { CostTracker, ExecutableTool } from "../src/types"
 import { getDynamicTool } from "../src/utils/dynamic-tools"
 
 // Get dynamic tools for testing
-const openaiExecutableTool = getDynamicTool("openai")!
-const anthropicExecutableTool = getDynamicTool("anthropic")!
+const openaiExecutableTool = getDynamicTool("openai")! as ExecutableTool
+const anthropicExecutableTool = getDynamicTool("anthropic")! as ExecutableTool
 const openaiTool = { ...openaiExecutableTool }
 const anthropicTool = { ...anthropicExecutableTool }
 delete (openaiTool as any).execute

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { createAIWithTools } from "../../src/ai"
 import { createToolCollection } from "../../src/tools"
+import type { ExecutableTool } from "../../src/types"
 import { getDynamicTool } from "../../src/utils/dynamic-tools"
 import { cleanupMocks, createMockCostTracker, createMockModel } from "../shared/test-utils"
 
@@ -23,7 +24,7 @@ describe("aI Interface Integration Tests", () => {
   describe("createAIWithTools", () => {
     it("should create AI instance with tools", () => {
       const model = createMockModel()
-      const tools = [getDynamicTool("openai")!]
+      const tools = [getDynamicTool("openai")!] as ExecutableTool[]
       const toolCollection = createToolCollection(tools)
 
       const aiWithTools = createAIWithTools(model, toolCollection)
@@ -49,8 +50,8 @@ describe("aI Interface Integration Tests", () => {
     it("should handle multiple tools", () => {
       const model = createMockModel()
       const tools = [
-        getDynamicTool("openai")!,
-        getDynamicTool("anthropic")!,
+        getDynamicTool("openai")! as ExecutableTool,
+        getDynamicTool("anthropic")! as ExecutableTool,
       ].filter(Boolean)
       const toolCollection = createToolCollection(tools)
 
@@ -140,7 +141,7 @@ describe("aI Interface Integration Tests", () => {
 
       model.invoke = vi.fn().mockResolvedValue(mockResponse)
 
-      const tools = [getDynamicTool("openai")!]
+      const tools = [getDynamicTool("openai")! as ExecutableTool]
       const toolCollection = createToolCollection(tools)
       const aiWithTools = createAIWithTools(model, toolCollection)
 
@@ -168,7 +169,7 @@ describe("aI Interface Integration Tests", () => {
 
       model.invoke = vi.fn().mockResolvedValue(mockResponse)
 
-      const tools = [getDynamicTool("openai")!]
+      const tools = [getDynamicTool("openai")!] as ExecutableTool[]
       const toolCollection = createToolCollection(tools)
 
       // Mock the tool collection execute method
@@ -226,7 +227,7 @@ describe("aI Interface Integration Tests", () => {
 
       model.invoke = vi.fn().mockResolvedValue(mockResponse)
 
-      const tools = [getDynamicTool("openai")!]
+      const tools = [getDynamicTool("openai")! as ExecutableTool]
       const toolCollection = createToolCollection(tools)
 
       // Mock tool execution failure
