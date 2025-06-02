@@ -83,5 +83,44 @@
         }
       }
     }
+  ],
+  "mcpTools": [
+    {
+      "name": "github",
+      "description": "Access GitHub repositories, issues, PRs, and perform code analysis via MCP",
+      "provider": "mcp",
+      "server_url": "https://github.com/api/mcp",
+      "server_label": "github_mcp",
+      "allowed_tools": ["search_repositories", "get_file_content", "create_issue", "list_pull_requests"],
+      "require_approval": "prompt",
+      "auth": {
+        "type": "bearer",
+        "header_name": "Authorization",
+        "env_var": "GITHUB_TOKEN"
+      }
+    },
+    {
+      "name": "shopify",
+      "description": "Access Shopify store data, products, orders, and inventory via MCP",
+      "provider": "mcp",
+      "server_url": "https://your-store.myshopify.com/api/mcp",
+      "server_label": "shopify_store",
+      "allowed_tools": ["search_products", "get_product_details", "check_inventory", "get_order_status"],
+      "require_approval": "never",
+      "auth": {
+        "type": "api_key",
+        "header_name": "X-Shopify-Access-Token",
+        "env_var": "SHOPIFY_ACCESS_TOKEN"
+      }
+    },
+    {
+      "name": "filesystem",
+      "description": "Access local filesystem for reading and writing files via MCP stdio server",
+      "provider": "mcp",
+      "server_url": "stdio://npx -y @modelcontextprotocol/server-filesystem /path/to/directory",
+      "server_label": "local_fs",
+      "allowed_tools": ["read_file", "write_file", "list_directory"],
+      "require_approval": "prompt"
+    }
   ]
 }

@@ -114,24 +114,39 @@ export interface CostConfig {
 }
 
 /**
- * MCP (Model Context Protocol) Tool Definition
- * Currently not implemented - this shows what we'd need to add
+ * MCP (Model Context Protocol) Tool Definition for OpenAI Responses API
+ * Based on OpenAI's native MCP support: https://platform.openai.com/docs/guides/tools-remote-mcp
  */
 export interface MCPTool {
   type: "mcp"
   server_label: string
   server_url: string
-  require_approval: "never" | "always" | "prompt"
-  description?: string
-  parameters?: {
-    type: "object"
-    properties: Record<string, any>
-    required?: string[]
+  require_approval?: "never" | "always" | "prompt"
+  allowed_tools?: string[]
+  headers?: Record<string, string>
+}
+
+/**
+ * MCP Tool Configuration for JSON definitions
+ */
+export interface MCPToolConfig {
+  name: string
+  description: string
+  provider: "mcp"
+  server_url: string
+  server_label?: string
+  allowed_tools?: string[]
+  require_approval?: "never" | "always" | "prompt"
+  headers?: Record<string, string>
+  auth?: {
+    type: "bearer" | "api_key" | "custom"
+    header_name?: string
+    env_var?: string
   }
 }
 
 /**
- * Executable MCP Tool (future implementation)
+ * Executable MCP Tool (for our tool factory system)
  */
 export interface ExecutableMCPTool extends MCPTool {
   execute: (params: any, costTracker?: CostTracker) => Promise<any>

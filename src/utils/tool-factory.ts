@@ -3,7 +3,7 @@ import type { BaseLanguageModel } from "@langchain/core/language_models/base"
 import { HumanMessage } from "@langchain/core/messages"
 import { ChatOpenAI } from "@langchain/openai"
 
-import type { CostTracker, ExecutableTool, Tool } from "../types"
+import type { CostTracker, ExecutableMCPTool, ExecutableTool, MCPToolConfig, Tool } from "../types"
 
 import { createToolResponse, handleToolError, prepareExecution, trackUsage } from "./cost-aware-execution"
 
@@ -13,7 +13,7 @@ import { createToolResponse, handleToolError, prepareExecution, trackUsage } fro
 export interface ToolConfig {
   name: string
   description: string
-  provider: "openai" | "anthropic" | "custom"
+  provider: "openai" | "anthropic" | "custom" | "mcp"
   modelClass: "ChatOpenAI" | "ChatAnthropic" | "custom"
   defaultModel: string
   modelOptions: string[]
@@ -38,6 +38,7 @@ const PROVIDER_DISPLAY_NAMES = {
   google: "Google",
   cohere: "Cohere",
   huggingface: "Hugging Face",
+  mcp: "MCP Server",
   custom: "custom",
 } as const
 
@@ -172,4 +173,48 @@ export function createExecutableTool(config: ToolConfig): ExecutableTool {
  */
 export function createToolsFromConfigs(configs: ToolConfig[]): ExecutableTool[] {
   return configs.map(createExecutableTool)
+}
+
+/**
+ * Create MCP tool for OpenAI Responses API integration
+ */
+export function createMCPTool(config: MCPToolConfig): ExecutableMCPTool {
+  // Build headers with authentication
+  const headers: Record<string, string> = { ...config.headers }
+
+  // Note: Authentication values should be provided at runtime by the user
+  // rather than read from environment variables at build time
+
+  const mcpTool: ExecutableMCPTool = {
+    type: "mcp",
+    server_url: config.server_url,
+    server_label: config.server_label || config.name,
+    allowed_tools: config.allowed_tools,
+    require_approval: config.require_approval || "prompt",
+    headers: Object.keys(headers).length > 0 ? headers : undefined,
+
+    execute: async (params: any, costTracker?: CostTracker) => {
+      // MCP tools are executed by OpenAI's infrastructure, not by us
+      // This execute function is for compatibility with our tool system
+      // but the actual execution happens via OpenAI Responses API
+
+      return {
+        success: false,
+        error: "MCP tools must be used with OpenAI Responses API, not executed directly",
+        response: "Please use this tool through createAIWithTools() which will handle MCP integration",
+        model: "mcp",
+        usage: null,
+        costTracker: costTracker?.getSummary(),
+      }
+    },
+  }
+
+  return mcpTool
+}
+
+/**
+ * Create multiple MCP tools from configurations
+ */
+export function createMCPToolsFromConfigs(configs: MCPToolConfig[]): ExecutableMCPTool[] {
+  return configs.map(createMCPTool)
 }

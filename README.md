@@ -172,7 +172,7 @@ const ai = createAIWithTools(model, allToolsEnhanced)
 
 ## Adding New Tools
 
-### 🚀 Method 1: LangChain-Compatible Tools (Recommended)
+### 🚀 Method 1: LangChain-Compatible Tools
 
 For tools supported by LangChain, you only need to add a JSON configuration:
 
@@ -240,7 +240,103 @@ const palmTool = getDynamicTool("palm")
 - ✅ Automatic testing compatibility
 - ✅ Zero code duplication
 
-### 🔧 Method 2: Custom Tools (Advanced)
+### 🔥 Method 2: MCP Tools (via OpenAI Native Support)
+
+**Model Context Protocol (MCP) tools are supported** via OpenAI's native MCP integration in the Responses API! This approach uses LangChain's `ChatOpenAI` client which automatically routes to the Responses API when MCP tools are bound.
+
+#### How It Works
+
+OpenAI handles all MCP protocol communication for us through their Responses API, and LangChain's `ChatOpenAI` seamlessly integrates with this. We just need to configure the MCP servers in our JSON config and LangChain + OpenAI do the rest. This approach:
+- ✅ **Uses our existing JSON configuration system**
+- ✅ **Leverages LangChain's ChatOpenAI client**
+- ✅ **Automatic Responses API routing for MCP tools**
+- ✅ **Zero MCP protocol implementation needed**
+- ✅ **Integrates with our cost tracking**
+
+#### Step 1: Configure MCP Tools in JSON
+
+Our `tool-definitions.json` already includes MCP tools:
+
+```json
+{
+  "mcpTools": [
+    {
+      "name": "github",
+      "description": "Access GitHub repositories, issues, PRs, and perform code analysis via MCP",
+      "provider": "mcp",
+      "server_url": "https://github.com/api/mcp",
+      "server_label": "github_mcp",
+      "allowed_tools": ["search_repositories", "get_file_content", "create_issue"],
+      "require_approval": "never",
+      "auth": {
+        "type": "bearer",
+        "header_name": "Authorization",
+        "env_var": "GITHUB_TOKEN"
+      }
+    }
+  ]
+}
+```
+
+#### Step 2: Use MCP Tools with LangChain's ChatOpenAI
+
+```typescript
+import { createAIWithMCPTools, getDynamicMCPTool } from "openagentic"
+
+// Get MCP tools from our JSON configuration
+const githubTool = getDynamicMCPTool("github")
+const shopifyTool = getDynamicMCPTool("shopify")
+
+// Set authentication headers at runtime
+if (githubTool) {
+  githubTool.headers = {
+    Authorization: `Bearer ${process.env.GITHUB_TOKEN}`
+  }
+}
+
+// Use with LangChain's ChatOpenAI + OpenAI's native MCP support
+const ai = createAIWithMCPTools([githubTool, shopifyTool], {
+  apiKey: process.env.OPENAI_API_KEY!,
+  model: "gpt-4",
+  maxCostCents: 100
+})
+
+const result = await ai.chat("Search my GitHub repos for React projects and check if we sell React merchandise in our Shopify store")
+console.log(result.response)
+```
+
+#### Step 3: Cost Tracking Integration
+
+```typescript
+// MCP tools work seamlessly with our cost tracking
+const result = await ai.chat("Analyze my repository structure", {
+  maxCostCents: 50, // Limit to 50 cents
+  conservativeMode: true // Use conservative token limits
+})
+
+console.log(`Cost: ${result.cost} cents`)
+console.log(`Usage: ${result.usage?.input_tokens} input + ${result.usage?.output_tokens} output tokens`)
+```
+
+#### Supported MCP Server Types
+
+| Type | URL Format | Example |
+|------|------------|---------|
+| **HTTP/SSE** | `https://domain.com/api/mcp` | GitHub, Shopify APIs |
+| **Streamable HTTP** | `https://domain.com/stream/mcp` | Modern MCP servers |
+| **stdio** | `stdio://command args` | Local filesystem, databases |
+
+#### Benefits of OpenAI Native MCP
+
+✅ **Zero MCP Protocol Code**: OpenAI handles all communication
+✅ **JSON Configuration**: Same simple setup as our other tools
+✅ **Automatic Authentication**: Environment variable integration
+✅ **Tool Filtering**: `allowed_tools` for security
+✅ **Approval Controls**: `require_approval` for safety
+✅ **Cost Tracking**: Integrated with our cost-aware system
+✅ **Lightweight**: No external MCP libraries needed
+
+### 🔧 Method 3: Custom Tools (Advanced)
 
 For tools that aren't LangChain-compatible or need custom logic:
 
@@ -306,65 +402,26 @@ const customToolConfig: ToolConfig = {
 const weatherTool = createExecutableTool(customToolConfig)
 ```
 
-### ⚠️ Method 3: MCP Tools (Not Yet Supported)
-
-**Model Context Protocol (MCP) tools are not currently supported**, but here's what we'd need to add:
-
-#### Current MCP Format (OpenAI):
-```
-// This format is NOT yet supported
-{
-  "type": "mcp",
-  "server_label": "deepwiki",
-  "server_url": "https://mcp.deepwiki.com/mcp",
-  "require_approval": "never"
-}
-```
-
-#### What we'd need to implement:
-
-1. **New MCP Tool Type**:
-```typescript
-// Would need to add to src/types.ts
-interface MCPTool {
-  type: "mcp"
-  server_label: string
-  server_url: string
-  require_approval: "never" | "always" | "prompt"
-}
-```
-
-2. **MCP Execution Engine**:
-```typescript
-// Would need MCP client integration
-import { MCPClient } from "@mcp/client" // Hypothetical
-
-const executeMCPTool = async (tool: MCPTool, params: any) => {
-  const client = new MCPClient(tool.server_url)
-  return await client.execute(params)
-}
-```
-
-3. **Updated Tool Factory**:
-```typescript
-// Add MCP support to createExecutableTool
-if (config.type === "mcp") {
-  return createMCPExecutableTool(config)
-}
-```
-
-**To request MCP support**, please [open an issue](https://github.com/yourusername/openagentic/issues) with your use case!
-
 ## Tool Development Best Practices
 
 ### 🎯 Which Method Should I Use?
 
-| Tool Type | Recommended Method | Effort Level |
-|-----------|-------------------|--------------|
-| **LangChain models** | JSON Config | ⭐ (5 minutes) |
-| **REST APIs** | Custom Executor | ⭐⭐ (30 minutes) |
-| **MCP tools** | Custom Executor | ⭐⭐⭐ (30+ minutes) |
-| **Custom integrations** | Custom Executor | ⭐⭐⭐ (30+ minutes) |
+| Tool Type | Recommended Method | Effort Level | Best For |
+|-----------|-------------------|--------------|----------|
+| **LangChain models** | JSON Config | ⭐ (5 minutes) | AI/ML providers |
+| **MCP servers** | JSON Config | ⭐ (5 minutes) | External APIs, databases |
+| **REST APIs** | Custom Executor | ⭐⭐ (30 minutes) | Custom integrations |
+| **Custom integrations** | Custom Executor | ⭐⭐⭐ (30+ minutes) | Specialized logic |
+
+### 🚀 **NEW: MCP vs LangChain - When to Use What?**
+
+| Use Case | MCP Tools | LangChain Tools |
+|----------|-----------|-----------------|
+| **External APIs** | ✅ Perfect (GitHub, Shopify) | ❌ Need custom wrappers |
+| **AI Models** | ❌ Not designed for this | ✅ Perfect (OpenAI, Claude) |
+| **Databases** | ✅ Great with MCP servers | ⭐ Possible but complex |
+| **File Systems** | ✅ Built-in support | ⭐ Manual implementation |
+| **Custom Logic** | ⭐ Via custom executors | ✅ Full control |
 
 ## Creating Custom Tools
 
