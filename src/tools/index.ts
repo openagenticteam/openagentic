@@ -1,4 +1,4 @@
-import type { CostTracker, ExecutableTool, Tool, ToolCall, ToolCollection } from "../types"
+import type { ExecutableTool, Tool, ToolCollection } from "../types"
 import { createToolCollection } from "../utils"
 
 import {
@@ -39,8 +39,8 @@ export const allTools: ToolCollection = createToolCollection(allExecutableTools)
 export const tools: Tool[] = [openai, anthropic]
 
 // Legacy execution function (backward compatibility)
-export const executeTool = async (toolCall: ToolCall, costTracker?: CostTracker): Promise<any> => {
-  return allTools.execute(toolCall, costTracker)
+export const executeTool = async (toolCall: any): Promise<any> => {
+  return allTools.execute(toolCall)
 }
 
 // Export utility function for creating custom tool collections

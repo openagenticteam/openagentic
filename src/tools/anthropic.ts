@@ -2,7 +2,7 @@ import type { AnthropicInput } from "@langchain/anthropic"
 import { ChatAnthropic } from "@langchain/anthropic"
 import { HumanMessage } from "@langchain/core/messages"
 
-import type { CostTracker, ExecutableTool, Tool } from "../types"
+import type { CostTracker, ExecutableTool, Tool, UsageRecord } from "../types"
 
 /**
  * Anthropic Tool Schema
@@ -45,30 +45,34 @@ export const anthropicTool: Tool = {
  * Anthropic Tool Execution Function
  * Handles the actual execution of Anthropic API calls with optional cost tracking
  */
-export const executeAnthropic = async ({
-  message,
-  apiKey,
-  modelName = "claude-3-5-sonnet-20240620",
-  maxTokens,
-}: {
-  message: string
-  apiKey: string
-  modelName?: AnthropicInput["model"]
-  maxTokens?: number
-}, costTracker?: CostTracker) => {
-  try {
-    // Pre-execution budget check
-    if (costTracker) {
-      if (!costTracker.canAffordQuery(modelName, message.length)) {
-        throw new Error(`Insufficient budget: Query estimated to cost more than remaining budget of ${costTracker.getRemainingBudgetCents()} cents`)
-      }
+export const executeAnthropic = async (
+  {
+    message,
+    apiKey,
+    modelName = "claude-3-5-sonnet-20240620",
+    maxTokens,
+  }: {
+    message: string
+    apiKey: string
+    modelName?: AnthropicInput["model"]
+    maxTokens?: number
+  },
+  costTracker?: CostTracker,
+) => {
+  // Pre-execution cost check (only if cost tracker provided)
+  if (costTracker) {
+    const promptLength = message.length
+    const estimatedOutputTokens = maxTokens || costTracker.getDefaultMaxTokens(modelName)
 
-      // Use cost-aware maxTokens if not explicitly provided
-      if (!maxTokens) {
-        maxTokens = costTracker.getDefaultMaxTokens(modelName)
-      }
+    if (!costTracker.canAffordQuery(modelName, promptLength, estimatedOutputTokens)) {
+      throw new Error(`Insufficient budget: Query estimated to cost more than remaining budget of ${costTracker.getRemainingBudgetCents()} cents`)
     }
 
+    // Use cost-aware maxTokens if not provided
+    maxTokens = maxTokens || costTracker.getDefaultMaxTokens(modelName)
+  }
+
+  try {
     const model = new ChatAnthropic({
       apiKey,
       modelName,
@@ -77,20 +81,26 @@ export const executeAnthropic = async ({
 
     const response = await model.invoke([new HumanMessage(message)])
 
-    // Post-execution cost tracking
-    if (costTracker && response.response_metadata?.tokenUsage) {
-      const { promptTokens, completionTokens } = response.response_metadata.tokenUsage
-      const costCents = costTracker.estimateCost(modelName, promptTokens, completionTokens)
+    // Track actual usage (only if cost tracker provided)
+    if (costTracker) {
+      const usage = response.response_metadata?.tokenUsage
+      if (usage) {
+        const inputTokens = usage.promptTokens || 0
+        const outputTokens = usage.completionTokens || 0
+        const actualCost = costTracker.estimateCost(modelName, inputTokens, outputTokens)
 
-      costTracker.addUsage({
-        model: modelName,
-        inputTokens: promptTokens,
-        outputTokens: completionTokens,
-        costCents,
-        timestamp: new Date(),
-        source: "tool",
-        toolName: "anthropic",
-      })
+        const usageRecord: UsageRecord = {
+          model: modelName,
+          inputTokens,
+          outputTokens,
+          costCents: actualCost,
+          timestamp: new Date(),
+          source: "tool",
+          toolName: "anthropic",
+        }
+
+        costTracker.addUsage(usageRecord)
+      }
     }
 
     return {
@@ -98,7 +108,7 @@ export const executeAnthropic = async ({
       response: response.content,
       model: modelName,
       usage: response.response_metadata?.tokenUsage || null,
-      costTracker: costTracker?.getSummary(),
+      ...(costTracker && { costTracker: costTracker.getSummary() }),
     }
   } catch (error) {
     throw new Error(`Anthropic execution failed: ${error instanceof Error ? error.message : "Unknown error"}`)

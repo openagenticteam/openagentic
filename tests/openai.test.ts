@@ -2,8 +2,8 @@ import { HumanMessage } from "@langchain/core/messages"
 import { ChatOpenAI } from "@langchain/openai"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-import { createCostTracker } from "../src/utils/cost-tracker"
 import { executeOpenAi, openai, openaiExecutableTool, openaiTool } from "../src/tools/openai"
+import type { CostTracker } from "../src/types"
 
 // Mock LangChain modules
 vi.mock("@langchain/openai", () => ({
@@ -16,6 +16,29 @@ vi.mock("@langchain/core/messages", () => ({
   HumanMessage: vi.fn().mockImplementation(content => ({ content })),
   AIMessage: vi.fn().mockImplementation(content => ({ content })),
 }))
+
+// Mock cost tracker for testing
+const createMockCostTracker = (remainingBudget = 100, defaultMaxTokens = 2048): CostTracker => ({
+  totalCostCents: 0,
+  maxCostCents: 500,
+  usageHistory: [],
+  getRemainingBudgetCents: vi.fn().mockReturnValue(remainingBudget),
+  canAfford: vi.fn().mockReturnValue(remainingBudget > 0),
+  addUsage: vi.fn(),
+  getDefaultMaxTokens: vi.fn().mockReturnValue(defaultMaxTokens),
+  estimateCost: vi.fn().mockReturnValue(10), // 10 cents
+  estimateQueryCost: vi.fn().mockReturnValue(15), // 15 cents
+  canAffordQuery: vi.fn().mockReturnValue(remainingBudget > 15) as any,
+  getSummary: vi.fn().mockReturnValue({
+    totalCostCents: 25,
+    maxCostCents: 500,
+    remainingBudgetCents: remainingBudget,
+    budgetUsedPercentage: 5,
+    totalQueries: 2,
+    orchestratorQueries: 1,
+    toolQueries: 1,
+  }),
+})
 
 describe("openAI Tool", () => {
   beforeEach(() => {
@@ -85,6 +108,13 @@ describe("openAI Tool", () => {
         "gpt-4-1106-preview",
       ])
     })
+
+    it("should include maxTokens parameter for cost-aware usage", () => {
+      expect(openaiTool.function.parameters.properties.maxTokens).toEqual({
+        type: "number",
+        description: "Maximum number of tokens to generate (optional, will use cost-aware default if not specified)",
+      })
+    })
   })
 
   describe("openaiExecutableTool", () => {
@@ -107,16 +137,17 @@ describe("openAI Tool", () => {
     const mockChatOpenAI = ChatOpenAI as any
 
     beforeEach(() => {
-      mockChatOpenAI.mockImplementation(() => ({
+      mockChatOpenAI.mockImplementation((config: any) => ({
         invoke: mockInvoke,
+        config, // Store config for assertions
       }))
     })
 
-    describe("successful execution", () => {
+    describe("successful execution without cost tracking", () => {
       it("should execute with required parameters", async () => {
         const mockResponse = {
           content: "Test response",
-          response_metadata: { tokenUsage: { total: 100 } },
+          response_metadata: { tokenUsage: { promptTokens: 50, completionTokens: 50, totalTokens: 100 } },
         }
         mockInvoke.mockResolvedValue(mockResponse)
 
@@ -129,7 +160,6 @@ describe("openAI Tool", () => {
         expect(ChatOpenAI).toHaveBeenCalledWith({
           apiKey: "test-api-key",
           modelName: "gpt-4",
-          maxTokens: undefined,
         })
 
         expect(HumanMessage).toHaveBeenCalledWith("Hello, world!")
@@ -139,91 +169,227 @@ describe("openAI Tool", () => {
           success: true,
           response: "Test response",
           model: "gpt-4",
-          usage: { total: 100 },
-          costTracker: undefined,
+          usage: { promptTokens: 50, completionTokens: 50, totalTokens: 100 },
         })
       })
 
-      it("should execute with cost tracking", async () => {
+      it("should use default model name when not provided", async () => {
+        const mockResponse = {
+          content: "Test response",
+          response_metadata: { tokenUsage: null },
+        }
+        mockInvoke.mockResolvedValue(mockResponse)
+
+        const result = await executeOpenAi({
+          message: "Hello",
+          apiKey: "test-key",
+        })
+
+        expect(ChatOpenAI).toHaveBeenCalledWith({
+          apiKey: "test-key",
+          modelName: "gpt-4-1106-preview", // Default model
+        })
+
+        expect(result).toEqual({
+          success: true,
+          response: "Test response",
+          model: "gpt-4-1106-preview",
+          usage: null,
+        })
+      })
+
+      it("should handle explicit maxTokens parameter", async () => {
+        const mockResponse = {
+          content: "Test response",
+          response_metadata: {},
+        }
+        mockInvoke.mockResolvedValue(mockResponse)
+
+        await executeOpenAi({
+          message: "Hello",
+          apiKey: "test-key",
+          modelName: "gpt-4",
+          maxTokens: 512,
+        })
+
+        expect(ChatOpenAI).toHaveBeenCalledWith({
+          apiKey: "test-key",
+          modelName: "gpt-4",
+          maxTokens: 512,
+        })
+      })
+    })
+
+    describe("cost tracking functionality", () => {
+      it("should perform pre-execution cost check when cost tracker provided", async () => {
+        const mockCostTracker = createMockCostTracker(100, 2048)
+        ;(mockCostTracker.canAffordQuery as any).mockReturnValue(true)
+
+        const mockResponse = {
+          content: "Test response",
+          response_metadata: { tokenUsage: { promptTokens: 50, completionTokens: 30, totalTokens: 80 } },
+        }
+        mockInvoke.mockResolvedValue(mockResponse)
+
+        await executeOpenAi({
+          message: "Hello",
+          apiKey: "test-key",
+          modelName: "gpt-4",
+        }, mockCostTracker)
+
+        expect(mockCostTracker.canAffordQuery).toHaveBeenCalledWith("gpt-4", "Hello".length, 2048)
+      })
+
+      it("should throw error when budget insufficient for query", async () => {
+        const mockCostTracker = createMockCostTracker(5, 2048) // Very low budget
+        ;(mockCostTracker.canAffordQuery as any).mockReturnValue(false)
+
+        await expect(
+          executeOpenAi({
+            message: "Hello",
+            apiKey: "test-key",
+            modelName: "gpt-4",
+          }, mockCostTracker),
+        ).rejects.toThrow("Insufficient budget: Query estimated to cost more than remaining budget of 5 cents")
+      })
+
+      it("should use cost-aware maxTokens when not explicitly provided", async () => {
+        const mockCostTracker = createMockCostTracker(100, 1024)
+        ;(mockCostTracker.canAffordQuery as any).mockReturnValue(true)
+
+        const mockResponse = {
+          content: "Test response",
+          response_metadata: { tokenUsage: { promptTokens: 50, completionTokens: 30 } },
+        }
+        mockInvoke.mockResolvedValue(mockResponse)
+
+        await executeOpenAi({
+          message: "Hello",
+          apiKey: "test-key",
+          modelName: "gpt-4",
+        }, mockCostTracker)
+
+        expect(ChatOpenAI).toHaveBeenCalledWith({
+          apiKey: "test-key",
+          modelName: "gpt-4",
+          maxTokens: 1024, // Should use cost tracker's default
+        })
+      })
+
+      it("should prioritize explicit maxTokens over cost tracker default", async () => {
+        const mockCostTracker = createMockCostTracker(100, 1024)
+        ;(mockCostTracker.canAffordQuery as any).mockReturnValue(true)
+
+        const mockResponse = {
+          content: "Test response",
+          response_metadata: { tokenUsage: { promptTokens: 50, completionTokens: 30 } },
+        }
+        mockInvoke.mockResolvedValue(mockResponse)
+
+        await executeOpenAi({
+          message: "Hello",
+          apiKey: "test-key",
+          modelName: "gpt-4",
+          maxTokens: 512, // Explicit value
+        }, mockCostTracker)
+
+        expect(ChatOpenAI).toHaveBeenCalledWith({
+          apiKey: "test-key",
+          modelName: "gpt-4",
+          maxTokens: 512, // Should use explicit value, not cost tracker default
+        })
+      })
+
+      it("should track usage and add to cost tracker", async () => {
+        const mockCostTracker = createMockCostTracker(100, 2048)
+        ;(mockCostTracker.canAffordQuery as any).mockReturnValue(true)
+
         const mockResponse = {
           content: "Test response",
           response_metadata: {
             tokenUsage: {
-              promptTokens: 10,
-              completionTokens: 20,
+              promptTokens: 50,
+              completionTokens: 30,
+              totalTokens: 80,
             },
           },
         }
         mockInvoke.mockResolvedValue(mockResponse)
 
-        const costTracker = createCostTracker(1000)
         const result = await executeOpenAi({
           message: "Hello",
           apiKey: "test-key",
           modelName: "gpt-4",
-        }, costTracker)
+        }, mockCostTracker)
 
+        // Verify cost estimation was called with correct values
+        expect(mockCostTracker.estimateCost).toHaveBeenCalledWith("gpt-4", 50, 30)
+
+        // Verify usage was recorded
+        expect(mockCostTracker.addUsage).toHaveBeenCalledWith({
+          model: "gpt-4",
+          inputTokens: 50,
+          outputTokens: 30,
+          costCents: 10, // Mock return value
+          timestamp: expect.any(Date),
+          source: "tool",
+          toolName: "openai",
+        })
+
+        // Verify cost tracker summary is included in result
+        expect(result.costTracker).toEqual({
+          totalCostCents: 25,
+          maxCostCents: 500,
+          remainingBudgetCents: 100,
+          budgetUsedPercentage: 5,
+          totalQueries: 2,
+          orchestratorQueries: 1,
+          toolQueries: 1,
+        })
+      })
+
+      it("should handle missing token usage gracefully", async () => {
+        const mockCostTracker = createMockCostTracker(100, 2048)
+        ;(mockCostTracker.canAffordQuery as any).mockReturnValue(true)
+
+        const mockResponse = {
+          content: "Test response",
+          response_metadata: {}, // No tokenUsage
+        }
+        mockInvoke.mockResolvedValue(mockResponse)
+
+        const result = await executeOpenAi({
+          message: "Hello",
+          apiKey: "test-key",
+          modelName: "gpt-4",
+        }, mockCostTracker)
+
+        // Should not call estimateCost or addUsage when no token usage available
+        expect(mockCostTracker.estimateCost).not.toHaveBeenCalled()
+        expect(mockCostTracker.addUsage).not.toHaveBeenCalled()
+
+        // But should still include cost tracker summary
         expect(result.costTracker).toBeDefined()
-        expect(result.costTracker?.totalQueries).toBe(1)
-        expect(result.costTracker?.toolQueries).toBe(1)
       })
 
-      it("should use cost-aware maxTokens when not provided", async () => {
+      it("should not include cost tracker in result when not provided", async () => {
         const mockResponse = {
           content: "Test response",
-          response_metadata: { tokenUsage: null },
+          response_metadata: { tokenUsage: { promptTokens: 50, completionTokens: 30 } },
         }
         mockInvoke.mockResolvedValue(mockResponse)
 
-        const costTracker = createCostTracker(1000)
-        await executeOpenAi({
+        const result = await executeOpenAi({
           message: "Hello",
           apiKey: "test-key",
           modelName: "gpt-4",
-        }, costTracker)
-
-        expect(ChatOpenAI).toHaveBeenCalledWith({
-          apiKey: "test-key",
-          modelName: "gpt-4",
-          maxTokens: expect.any(Number),
         })
-      })
 
-      it("should respect explicit maxTokens over cost-aware defaults", async () => {
-        const mockResponse = {
-          content: "Test response",
-          response_metadata: { tokenUsage: null },
-        }
-        mockInvoke.mockResolvedValue(mockResponse)
-
-        const costTracker = createCostTracker(1000)
-        await executeOpenAi({
-          message: "Hello",
-          apiKey: "test-key",
-          modelName: "gpt-4",
-          maxTokens: 100,
-        }, costTracker)
-
-        expect(ChatOpenAI).toHaveBeenCalledWith({
-          apiKey: "test-key",
-          modelName: "gpt-4",
-          maxTokens: 100,
-        })
+        expect(result).not.toHaveProperty("costTracker")
       })
     })
 
     describe("error handling", () => {
-      it("should throw error when budget insufficient", async () => {
-        const costTracker = createCostTracker(1)
-        await expect(
-          executeOpenAi({
-            message: "This is a very long message that would cost more than 1 cent",
-            apiKey: "test-key",
-            modelName: "gpt-4",
-          }, costTracker),
-        ).rejects.toThrow("Insufficient budget")
-      })
-
       it("should throw detailed error for ChatOpenAI constructor errors", async () => {
         mockChatOpenAI.mockImplementation(() => {
           throw new Error("Invalid API key")
@@ -273,6 +439,19 @@ describe("openAI Tool", () => {
           }),
         ).rejects.toThrow("OpenAI execution failed: Unknown error")
       })
+
+      it("should handle cost tracker budget exhaustion errors", async () => {
+        const mockCostTracker = createMockCostTracker(0, 2048) // No budget
+        ;(mockCostTracker.canAffordQuery as any).mockReturnValue(false)
+
+        await expect(
+          executeOpenAi({
+            message: "Hello",
+            apiKey: "test-key",
+            modelName: "gpt-4",
+          }, mockCostTracker),
+        ).rejects.toThrow("Insufficient budget")
+      })
     })
 
     describe("parameter validation scenarios", () => {
@@ -308,6 +487,59 @@ describe("openAI Tool", () => {
         })
 
         expect(HumanMessage).toHaveBeenCalledWith(longMessage)
+      })
+
+      it("should handle different model names", async () => {
+        const mockResponse = {
+          content: "Test response",
+          response_metadata: {},
+        }
+        mockInvoke.mockResolvedValue(mockResponse)
+
+        await executeOpenAi({
+          message: "Hello",
+          apiKey: "test-key",
+          modelName: "gpt-3.5-turbo",
+        })
+
+        expect(ChatOpenAI).toHaveBeenCalledWith({
+          apiKey: "test-key",
+          modelName: "gpt-3.5-turbo",
+        })
+      })
+
+      it("should handle complex messages", async () => {
+        const mockResponse = {
+          content: "Complex response",
+          response_metadata: {},
+        }
+        mockInvoke.mockResolvedValue(mockResponse)
+
+        const complexMessage = "This is a complex message with special characters: @#$%^&*()"
+
+        await executeOpenAi({
+          message: complexMessage,
+          apiKey: "test-key",
+          modelName: "gpt-4",
+        })
+
+        expect(HumanMessage).toHaveBeenCalledWith(complexMessage)
+        expect(mockInvoke).toHaveBeenCalledWith([{ content: complexMessage }])
+      })
+
+      it("should handle missing response_metadata", async () => {
+        const mockResponse = {
+          content: "Test response",
+          // No response_metadata
+        }
+        mockInvoke.mockResolvedValue(mockResponse)
+
+        const result = await executeOpenAi({
+          message: "Hello",
+          apiKey: "test-key",
+        })
+
+        expect(result.usage).toBeNull()
       })
     })
   })

@@ -1,11 +1,30 @@
 import type { BaseLanguageModel } from "@langchain/core/language_models/base"
 
-import type { AIWithTools, CostAwareOptions, CostTracker, ToolCollection } from "./types"
+import type { CostAwareOptions, ToolCollection, UsageRecord } from "./types"
 import { createCostTracker } from "./utils/cost-tracker"
+
+export interface AIWithTools {
+  chat: (message: string, options?: CostAwareOptions) => Promise<{
+    response: string
+    toolCalls?: any[]
+    metadata?: any
+    costTracker?: {
+      totalCostCents: number
+      maxCostCents: number
+      remainingBudgetCents: number
+      budgetUsedPercentage: number
+      totalQueries: number
+      orchestratorQueries: number
+      toolQueries: number
+    }
+  }>
+  model: BaseLanguageModel
+  tools: ToolCollection
+}
 
 /**
  * Create an AI interface with tools that simplifies usage to just a few lines
- * Automatically handles tool binding, execution, and result formatting
+ * Automatically handles tool binding, execution, result formatting, and optional cost tracking
  */
 export const createAIWithTools = (
   model: BaseLanguageModel,
@@ -22,44 +41,61 @@ export const createAIWithTools = (
     : model
 
   const chat = async (message: string, options?: CostAwareOptions) => {
+    const costTracker = options?.maxCostCents ? createCostTracker(options.maxCostCents) : undefined
+
     try {
-      // Create cost tracker if options provided
-      const costTracker = options ? createCostTracker(options.maxCostCents) : undefined
+      // Get model name for cost tracking
+      const modelName = (model as any).modelName || (model as any).model || "gpt-4"
+
+      // Pre-execution cost check for orchestrator (if cost tracker enabled)
+      if (costTracker && !costTracker.canAffordQuery(modelName, message.length)) {
+        throw new Error(`Insufficient budget: Orchestrator query estimated to cost more than remaining budget of ${costTracker.getRemainingBudgetCents()} cents`)
+      }
+
+      // Use cost-aware maxTokens for the orchestrator (if cost tracker enabled)
+      let maxTokens: number | undefined
+      if (costTracker) {
+        const baseMaxTokens = costTracker.getDefaultMaxTokens(modelName)
+        if (options?.conservativeMode) {
+          // Conservative mode: use more restrictive token limits
+          maxTokens = Math.min(baseMaxTokens, 1024)
+        } else {
+          // Normal mode: use the cost tracker's dynamic token limits
+          maxTokens = baseMaxTokens
+        }
+      }
 
       // Type assertion for invoke method
       const invokeModel = boundModel as BaseLanguageModel & {
-        invoke: (messages: any[]) => Promise<any>
-      }
-
-      // Pre-execution budget check for orchestrator
-      if (costTracker) {
-        const modelName = (model as any).modelName || "gpt-4" // Default to gpt-4 if model name not available
-        if (!costTracker.canAffordQuery(modelName, message.length)) {
-          throw new Error(`Insufficient budget: Query estimated to cost more than remaining budget of ${costTracker.getRemainingBudgetCents()} cents`)
-        }
+        invoke: (messages: any[], options?: any) => Promise<any>
       }
 
       const response = await invokeModel.invoke([
         { role: "user", content: message },
-      ])
+      ], maxTokens ? { maxTokens } : undefined)
 
-      // Track orchestrator usage
-      if (costTracker && response.response_metadata?.tokenUsage) {
-        const { promptTokens, completionTokens } = response.response_metadata.tokenUsage
-        const modelName = (model as any).modelName || "gpt-4"
-        const costCents = costTracker.estimateCost(modelName, promptTokens, completionTokens)
+      // Track orchestrator usage (if cost tracker enabled)
+      if (costTracker) {
+        const usage = response.response_metadata?.tokenUsage
+        if (usage) {
+          const inputTokens = usage.promptTokens || 0
+          const outputTokens = usage.completionTokens || 0
+          const actualCost = costTracker.estimateCost(modelName, inputTokens, outputTokens)
 
-        costTracker.addUsage({
-          model: modelName,
-          inputTokens: promptTokens,
-          outputTokens: completionTokens,
-          costCents,
-          timestamp: new Date(),
-          source: "orchestrator",
-        })
+          const usageRecord: UsageRecord = {
+            model: modelName,
+            inputTokens,
+            outputTokens,
+            costCents: actualCost,
+            timestamp: new Date(),
+            source: "orchestrator",
+          }
+
+          costTracker.addUsage(usageRecord)
+        }
       }
 
-      // Handle tool calls if present
+      // Handle tool calls
       if (response.tool_calls && response.tool_calls.length > 0) {
         const toolResults = []
 
@@ -87,14 +123,14 @@ export const createAIWithTools = (
           response: response.content || "",
           toolCalls: toolResults,
           metadata: response.response_metadata,
-          costTracker: costTracker?.getSummary(),
+          ...(costTracker && { costTracker: costTracker.getSummary() }),
         }
       }
 
       return {
         response: response.content || response.toString(),
         metadata: response.response_metadata,
-        costTracker: costTracker?.getSummary(),
+        ...(costTracker && { costTracker: costTracker.getSummary() }),
       }
     } catch (error) {
       throw new Error(`AI chat failed: ${error instanceof Error ? error.message : "Unknown error"}`)

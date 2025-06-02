@@ -50,16 +50,30 @@ export type OATool = Tool & {
   example?: string
 }
 
-// Cost tracking types
+// Cost-aware types
+export interface ModelCostConfig {
+  max_tokens: number
+  max_input_tokens: number
+  max_output_tokens: number
+  input_cost_per_token: number
+  output_cost_per_token: number
+  litellm_provider: string
+  mode: string
+  supports_function_calling?: boolean
+  supports_prompt_caching?: boolean
+  supports_system_messages?: boolean
+  supports_tool_choice?: boolean
+}
+
 export interface CostTracker {
   totalCostCents: number
   maxCostCents: number
   usageHistory: UsageRecord[]
   getRemainingBudgetCents(): number
-  canAfford(costCents: number): boolean
+  canAfford(estimatedCostCents: number): boolean
   addUsage(record: UsageRecord): void
   getDefaultMaxTokens(model: string): number
-  estimateCost(model: string, inputTokens: number, outputTokens: number): number
+  estimateCost(model: string, inputTokens: number, outputTokens?: number): number
   estimateQueryCost(model: string, promptLength: number, expectedOutputTokens?: number): number
   canAffordQuery(model: string, promptLength: number, expectedOutputTokens?: number): boolean
   getSummary(): CostSummary
@@ -75,6 +89,7 @@ export interface UsageRecord {
   toolName?: string
 }
 
+// Backward compatibility: CostSummary interface
 export interface CostSummary {
   totalCostCents: number
   maxCostCents: number
@@ -86,6 +101,6 @@ export interface CostSummary {
 }
 
 export interface CostAwareOptions {
-  maxCostCents: number
+  maxCostCents?: number
   conservativeMode?: boolean
 }
